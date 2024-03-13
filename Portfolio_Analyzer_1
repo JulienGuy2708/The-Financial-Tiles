@@ -1,0 +1,553 @@
+import matplotlib
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import math
+import numpy as np
+import tkinter as tk
+import pandas as pd
+from cartopy import crs as ccrs, feature as cfeature
+import seaborn as sns
+from matplotlib import colors
+
+matplotlib.use('TkAgg')
+
+portfolio={'Defense':['Rheinmetall/RHM.DE', 'Dassault Aviation/AM.PA','Airbus/AIR.PA','Rolls Royce/RR.L'],
+           'Finance':['Amundi/AMUN.PA', 'Deutsche Bank/DBK.DE', 'Swiss Re/SREN.SW', 'UniCredit/UCG.MI',
+                      'BNP Paribas/BNP.PA'],
+           'Pharma':['Sanofi/SAN.PA', 'Novartis/NOVN.SW', 'Bayer/BAYN.DE', 'BioNTech/BION.DE'],
+           'Industry':['Air Liquide/AL.PA','BMW/BMW.DE','ASML Holdings/ASML.NL','Leonardo S.p.a/LDO.MI','Volkswagen/VW.DE']}
+
+color_dict={'Defense':['forestgreen', 'mediumseagreen', 'chartreuse', 'yellowgreen', 'palegreen', 'darkgreen'],
+            'Finance':['red', 'firebrick', 'tomato', 'darkorange','orangered'],
+            'Pharma':['navy', 'cyan', 'deepskyblue', 'blue', 'teal'],
+            'Industry':['magenta','deeppink','pink','darkviolet','violet']}
+
+class portfolio_analyzer(tk.Frame):
+    '''portfolio_analyzer creates an interactive dashboard of financial data taken from a user-defined dictionary
+    of stocks in defense, finance, pharmaceutical and industrial sectors. It further call tkinter to create a GUI
+    where data is displayed upon user input.
+
+    The functions defined here use two inputs that the user must build beforehand, a portfolio dictionary and a
+    color dictionary.
+
+    The portfolio dictionary has the following structure:
+    portfolio={'Defense':['stockname1', 'stockname2',...,'stocknameN'],
+               'Finance':['stockname1', 'stockname2',...,'stocknameN'],
+               'Pharma':['stockname1', 'stockname2',...,'stocknameN'],
+               'Industry':['stockname1', 'stockname2',...,'stocknameN']}
+
+    For display purposes, portfolio_analyzer assigns color families to sectors an unique colors to stocks.
+    These are stored in a user-defined dictionary of stock sectors and colors with the following structure:
+    color_dict={'Defense':['color1', 'color2', '...', 'colorN'],
+                'Finance':['color1', 'color2', '...', 'colorN'],
+                'Pharma':['color1', 'color2', '...', 'colorN'],
+                'Industry':['color1', 'color2', '...', 'colorN']}
+
+    Stockname follows this structure: company_name/stock_code.location_code (eg: Airbus/AIR.PA).
+    stock markets use stock and country codes as shown below, which we also use here:
+            DEFENSE:  RHM = Rheinmetall (EUR), AM = Dassault Aviation (EUR), AIR = Airbus (EUR), RR = Rolls Royce (GBP)
+            FINANCE:  AMUN = Amundi (EUR), DBK = Deutsche Bank (EUR), SREN = Swiss Re (CHF), UCG= UniCredit (EUR),
+                      BNP = BNP Paribas,
+            PHARMA:   NOVN = Novartis (CHF), BAYN = Bayer (EUR), SAN = Sanofi (EUR), UCB = Union Chimique Belge (EUR),
+                      BION.DE = BioNTech SE (EUR)
+            INDUSTRY: AL = Air Liquide (EUR), BMW = Bayerische Motoren Werke (EUR), ASML = Advanced Semiconductor
+                      Materials Lithography (EUR), VW = Volkswagen (EUR)
+
+            COUNTRY / CITY CODES: DE = Deutschland, PA= Paris, SW = Switzerland, MI = Milan, BR = Brussels, L = London,
+                                  CO = Copenhagen, NL= Netherlands, LDO = Leonardo (EUR)
+
+    By sticking to this naming convention we can directly use .csv files downloaded from Yahoo! Finance:
+    https://finance.yahoo.com/.
+    Simply follow the url, search for any stock you want in europe, go to "historical data", set the dates to cover
+    the desired span, and download the .csv file. Open the file and manually add the following columns, copying the
+    values from Yahoo!Finance in the row underneath:
+
+    PE ratio (trailing)
+    Debt (in B)
+    Revenue (in B)
+    EPS
+    BVPS
+    HQ location
+    Lon
+    Lat
+    currency          (not in use but necessary in the file)
+    Graham	          (not in use but necessary in the file)
+    Pretax Income 2023
+    Pretax Income 2022
+    Pretax Income 2021
+
+    End by saving the file in the same folder as this script. Add the stock name to the portfolio dictionary as shown
+    above. Expand the color dictionary accordingly if needed.
+
+    The imports necessary for portfolio_analyzer are:
+    import matplotlib
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    import math
+    import numpy as np
+    import tkinter as tk
+    import pandas as pd
+    from cartopy import crs as ccrs, feature as cfeature
+    import seaborn as sns
+    from matplotlib import colors
+
+    PERSPECTIVES: - keep modifying plot_data so that unchecking a CheckButton removes the corresponding artists
+                    throughout the figure and rescales the plot accordingly.
+                  - figure out how to make new fonts available to matplotlib and replace all fonts by Outfit.
+                  - use web scraping to get all relevant data from Yahoo!Finance automatically, using the entries in
+                    the portfolio dictionary.
+                  - create an export function to generate a pdf report that looks like a page of the Financial Times
+                  - share this code on Github and pray to God someone will give me a job finally
+
+    --------------------------------------------------------'''
+    def __init__(self, master=None):
+        # ------- Instantiate program and accessible methods -------
+        tk.Frame.__init__(self, master)
+        self.grid()
+        self.createWidgets(portfolio)  # Create Checkbuttons
+        self.var = tk.IntVar()  # Keep track of Checkbutton states across methods (one is enough here)
+        self.figure = plt.Figure(figsize=(19,8.5)) # Create the figure containing our financial dashboard
+        self.figure.set_facecolor('#FFF1E0') # #FFF9F5 is "Floral White" and #FFF1E0 is "Old Lace"
+        self.dashboard_layout() # Creates empty plots which we later fill with data
+        self.dataframes={}  # Empty dictionary where our data will be stored after loading
+        self.load_data(portfolio,color_dict)    # Imports the data into the empty dict self.dataframes
+
+        help(portfolio_analyzer)
+
+
+    def createWidgets(self,portfolio):
+        '''
+
+        This method iterates through portfolio and automatically generates a CheckButton for every stock
+        listed there. The corresponding data is plotted when the user clicks on the Checkbutton by calling
+        plot_data().
+
+        In addition, It creates a Quit button for the GUI, and a button that clears all plots and resets them
+        for further use by calling clear_plots().
+
+        ------------------------------------
+        '''
+        # ------- Create the quit button -------
+        # Try to use this to quit the program, and NOT the Windows X button ffs
+        self.quitButton = tk.Button(self, text='Quit', command=self.quit)
+        self.quitButton.grid(column=0, row=0, padx=10, pady=10, sticky='e')
+
+        # ------- Create the clear button -------
+        # Remove all plotted data
+        self.clearButton = tk.Button(self, text='Clear Plots', command=self.clear_plots)
+        self.clearButton.grid(column=1, row=0, padx=10, pady=10, sticky='w')
+
+        # ------- Create one checkbutton per stock in our portfolio -------
+        # How cool is that? Our GUI is populated automatically!
+        i=0
+        for stock_sector, stocks in portfolio.items():  # creates a checkbutton for every stock in our portfolio
+            for stock_name in stocks:  # iterates through our stock dictionary
+                var = tk.IntVar() # will pass the checkbutton state variable to plot_data()
+                self.but = tk.Checkbutton(self, text=stock_name, variable=var,
+                                            command=lambda f=stock_name, v=var: self.plot_data(f, v))
+                if i<9:
+                    self.but.grid(column=i, row=1, padx=10, pady=10, sticky='w')
+                else:
+                    self.but.grid(column=i-9, row=2, padx=10, pady=10, sticky='w')
+                i=i+1
+                # we may want to create another method that keeps f, and plots/removes the
+                # corresponding data depending on the boolean value of checkbutton - we tried and it is very hard
+
+
+    def dashboard_layout(self):
+        '''
+
+        This function creates a figure and fills them with various plots in which data are later plotted. The figure
+        appears below the widgets and is intentionally styled to look like a page of The Financial Times as a homage.
+
+        ------------------------------------
+        '''
+
+        # ------- Create the dashboard layout -------
+        self.n = 0  # counter to help shift data along x axis as it is added to the plot
+        self.figure.suptitle('The Financial Tiles', fontsize=30, weight='bold',font='Times New Roman')
+
+        # 1.create an empty plot in a chosen location on the figure using subplot2grid
+        self.ax1 = plt.subplot2grid((6, 4), (0, 0), rowspan=3, colspan=3, fig = self.figure, facecolor='#FFF1E0')
+        # 2.add a light grey grid
+        self.ax1.grid(True, color='silver', alpha=0.5)
+        # 3.remove the box around the plot
+        sns.despine(self.figure, self.ax1, top=True, right=True, bottom=True, left=True)
+        # 4.remove the x and y ticks
+        self.ax1.tick_params(left=False, bottom=False)
+        # 5.add a title
+        self.ax1.set_title(label='Historical stock price', loc='left', fontsize=10, weight='bold')
+        # 6.add x and y ticks
+        self.ax1.set_xlabel(xlabel='Date', fontsize=10), self.ax1.set_ylabel(ylabel='Stock price (local currency)',
+                                                                             fontsize=10)
+        # 7 set axis min and max (optional - not in use currently because the data range is wide)
+        #self.ax1.set_ylim([ymin, ymax])
+        # 8. Repeat the procedure for subsequent subplots!
+
+
+        self.ax2 = plt.subplot2grid((6, 4), (4, 0), rowspan=2, colspan=1, fig = self.figure, facecolor='#FFF1E0')
+        self.ax2.grid(True, color='silver', alpha=0.5)
+        sns.despine(self.figure, self.ax2, top=True, right=True, bottom=True, left=True)
+        self.ax2.tick_params(left=False, bottom=False)
+        self.ax2.set_xticklabels([]) # gets rid of the useless x labels
+        self.ax2.set_title(label='Stock performance 2022-2023', loc='left', fontsize=10, weight='bold')
+        self.ax2.set_ylabel(ylabel='Yearly Price change (%)', fontsize=10)
+
+
+
+        self.ax3 = plt.subplot2grid((6, 4), (4, 1), rowspan=2, colspan=1, fig = self.figure, facecolor='#FFF1E0')
+        sns.despine(self.figure, self.ax3, top=True, right=True, bottom=True, left=True)
+        self.ax3.axline([0,0],slope=1, c='silver', alpha=0.5, lw=1) # draw a y = x line to facilitate reading data
+        self.ax3.set_xscale('log'), self.ax3.set_yscale('log') # switch to a log scale for readability
+        self.ax3.set_xbound(lower=0,upper=1000), self.ax3.set_ybound(lower=0,upper=1000)
+        self.ax3.grid(True, color='silver', alpha=0.5, which='both')
+        self.ax3.tick_params(left=False, bottom=False)
+        self.ax3.set_title(label='Revenue to Debt ratio', loc='left', fontsize=10, weight='bold')
+        self.ax3.set_xlabel(xlabel='Debt (in B)', fontsize=10), self.ax3.set_ylabel(ylabel='Revenue (in B)', fontsize=10)
+
+
+        self.ax4 = plt.subplot2grid((6, 4), (4, 2), rowspan=2, colspan=1, fig = self.figure, polar=True,
+                                    facecolor='#FFF9F5', frameon=False)
+        self.ax4.grid(True, color='silver', alpha=0.5)
+        self.ax4.set_title(label='Price to Earnings ratio', loc='center', fontsize=10, weight='bold')
+        self.ax4.set_xticklabels([])
+
+
+        # create a map for ax5
+        projPC = ccrs.PlateCarree()
+        lonW, lonE, latS, latN = 20, -10, 35, 60
+        cLat = (latN + latS) / 2
+        cLon = (lonW + lonE) / 2
+        res = '50m' # This can be change to increase or decrease the resolution of coastlines
+        self.ax5 = plt.subplot2grid((6, 4), (0, 3), rowspan=3, colspan=1, fig = self.figure, projection=projPC,
+                                    facecolor='#FFF1E0')
+        self.ax5.set_extent([lonW, lonE, latS, latN], crs=projPC) # defines the region we look at using coordinates
+        self.ax5.coastlines(resolution=res, color='black') # adds coastlines
+        self.ax5.add_feature(cfeature.BORDERS, linewidth=0.5, edgecolor='blue') # adds country borders, useful here
+        self.ax5.set_facecolor(cfeature.COLORS['water']) # if you want blue water
+        self.ax5.add_feature(cfeature.LAND) # if you want brown land
+        self.ax5.set_title(label='Headquarters location', loc='center', fontsize=10, weight='bold')
+
+
+
+        self.ax6 = plt.subplot2grid((6, 4), (3, 3), rowspan=3, colspan=1, fig = self.figure, polar=True,
+                                    facecolor='#FFF1E0')
+        self.ax6.set_thetamin(-25)
+        self.ax6.set_thetamax(205)
+        self.ax6.set_theta_zero_location('W')
+        self.ax6.set_theta_direction(-1)
+        self.ax6.set_rscale('log')
+        self.ax6.set_rmin(10)
+        self.ax6.set_rmax(1500)
+        self.ax6.set_rorigin(1)
+        self.ax4.grid(True, color='silver', alpha=0.5, which='both')
+        self.ax6.set_xticklabels([-0.5,0,0.5, 1, 1.5, 2]) # use a pseudo x scale
+        props = dict(boxstyle='square', facecolor='silver', alpha=0.5)  # textbox features
+        # add some explanation to the plot: datapoints below 1 are undervalued, over 1 are overvalued
+        self.ax6.text(0, 0.9, 'Undervalued', transform=self.ax6.transAxes, fontsize=10, verticalalignment='top',
+                      bbox=props)
+        self.ax6.text(0.7, 0.9, 'Overvalued', transform=self.ax6.transAxes, fontsize=10, verticalalignment='top',
+                      bbox=props)
+        self.ax6.set_title(label='Current price to Graham Value ratio', loc='center', fontsize=10, weight='bold')
+
+
+        #self.figure.tight_layout()
+        #self.figure.get_constrained_layout()   nne of these look good here, maye ty GridSpec in another version
+
+        # ------- Display the dashboard -------
+        self.canvas = FigureCanvasTkAgg(self.figure)
+        self.canvas.get_tk_widget().grid()
+        self.canvas.draw()
+
+
+    def load_data(self,portfolio,color_dict):
+        '''
+
+        :param portfolio: portfolio dict as defined above
+        :param color_dict: color dict as defned above
+        :return:
+
+        This method iterates through the portfolio dictionary, and then uses panda functions to open the corresponding
+        .csv file using panda.read_csv() and read the data into a dataframe df.
+
+        The dataframe is then modified by adding a unique color in the "currency" column. The function is taken from
+        the color dictonary at the same position as the stock is in portfolio. This results in a unique
+        stock/color pairing.
+
+        In addition, load_data also converts the first column of the .csv files (Dates) into Datetime format with
+        panda.to_datetime().
+        Missing data in stock prices, which are common, are filled in with interpolate().
+
+        Finally, the dataframe and its corresponding stock name are saved in the self.dataframes dict for later use.
+
+        --------------------------------------------
+        '''
+
+        for stock_sector, stocks in portfolio.items(): # load historical data for every stock in our portfolio
+            color_list=color_dict[stock_sector]
+            for i, stock_name in enumerate(stocks):
+                name=stock_name.split('/')
+                name=f"{name[1]}.csv" # The csv files are always in the "RHM.DE" format. We must cut the / and
+                # whatever comes before in the variable names taken from the dictionary
+                df = pd.read_csv(name, sep=",")
+
+                # ------- Deal with missing data --------
+                # Stock price data has missing values on days when no trade happens (other than weekends).
+                # If day N is skipped, the opening value on day N+1 is more or less the closing value on N-1.
+                # This means that we can use interpolation to fill in missing values:
+                df = df.interpolate()
+
+                # ------- Fix the time axis --------
+                # .csv files from Yahoo!Finance have inconsistent date formatting.
+                # We need to convert time data into datetime type:
+                df['Date'] = pd.to_datetime(df['Date'])
+
+                # ------- Assign a unique color to each stock -------
+                # We want each economic sector to have its decicated color with stock distinguished by unique hues
+                # For example, defense is always green and stocks are dark green, apple, etc
+                df.at[0, 'currency'] = color_list[i] # the name "currency" is outdated, please ignore, we just use this
+                # space to write our color in
+
+                # ------- Store the data in a dataframe dictionary -------
+                self.dataframes[stock_name] = df  # store the data for quick access later
+
+
+    def plot_data(self,f,var):
+        '''
+
+        :param f: stock name corresponding to whichever CheckButton was clicked last
+        :param var: Boolean value of whichever CheckButton was clicked last
+        :return:
+
+        This funtion reads the dataframes from self.dataframes corresponding to the stock whose name is associated to
+        the CheckButton that was clicked last.
+
+        If the Boolean State of the Button is "checked" (var = 1), the function them fills the plots created by
+        dashboard_layout() with the data from self.dataframe
+
+        If the Boolean State of the Button is "unchecked" (var = 0), the function (tries to) remove all corresponding
+        data from any plot (Not Yet Fully Functional!)
+
+        The data plotted is:
+        ax1, line plot: stock price over time
+        ax2, bar graph: stock price variation from december 2022 to december 2023 (in %)
+        ax3, scatterplot: Debt (x) and Revenue (y), in Billion of local currency, log-log scale
+        ax4, rose plot: Price to Earnings ratio
+        ax5, map: Location of the company's HQ in europe (Longitude and Latitude)
+        ax6, semicircular polar scatter: - ratio of the current stock price to the stock's Intrinsic Valued calculated
+                                         using a modified Graham Value (see code comments) in theta
+                                         - current stock price in r (log scale)
+                                         - potential gain or loss when buying the stock (difference between current
+                                           price and Intrinsic Value). Circle size proportional to amount.
+
+        How to read the data?
+        Potentially undervalued and profitable stocks have:
+                        - not the highest historical prize so there is room to rebound (ax1)
+                        - positive growth (ax2)
+                        - low debt and high revenue (ax3)
+                        - low Price to earnings ratio (ax4)
+                        - the currency change rate, taxes and transaction fees are acceptable (ax5)
+                        - they have big circles on the left side of the plot, close to the bottom (ax6) which means
+                          that their current price is lower than their intrinsic price, they have a lot of potential
+                          to go up, and they are cheap
+
+        -----------------------------------------
+        '''
+
+        # ------- Grab the data from the dictionary corresponding to the last activated checkbutton -------
+        df = self.dataframes[f] # f is nothing else but stock_name as defined in createWidgets
+
+        # ------- If the Checkbutton was checked, we plot the corresponding data -------
+        if var.get()==1: # check the boolean state of the last clicked Checkbutton
+            self.n = self.n + 1  # This will help plotting by shifting new data along the x axis as it comes
+
+            # ------- Plot price history in top left -------
+            # We plot three curves per stock: close, min and max price with shading over daily range
+            # A candle plot is a box plot showing the day's transactions but we don't have this data
+            self.ax1.plot(df.Date, df.Close, color=df.at[0, 'currency'], linewidth=1, alpha=1, label=f)
+            self.ax1.plot(df.Date, df.High, color=df.at[0, 'currency'], linewidth=0.5, alpha=0.1)
+            self.ax1.plot(df.Date, df.Low, color=df.at[0, 'currency'], linewidth=0.5, alpha=0.1)
+            self.ax1.fill_between(df.Date, df.Low, df.High, facecolor=df.at[0, 'currency'], alpha=0.4)
+            self.ax1.legend(loc='upper left')
+
+            # ------- Plot yearly performance in bottom left -------
+            Xopen, Xend = df.Close.iloc[0], df.Close.iloc[-1]  # Picks stock value at first and last days
+            perf = lambda Xopen, Xend: (((Xend - Xopen) / Xopen) * 100) # Defines the formula for yearly change
+            performance = perf(Xopen, Xend) # Calculates yearly change for selected stock
+            self.ax2.bar(self.n, performance, color=df.at[0, 'currency'], width=0.4,alpha=0.5, edgecolor='k')
+
+            # ------- Plot Income vs Debt scatterplot on the middle bottom -------
+            self.ax3.scatter(df.at[0, 'Debt (in B)'],df.at[0, 'Revenue (in B)'], color=df.at[0, 'currency'],
+                         alpha=0.5, edgecolors='k')
+            self.ax3.set_xbound(lower=1,upper=1000), self.ax3.set_ybound(lower=1,upper=1000)
+            # To do: make it pretty, dynamically set the scale to the data
+
+            # ------- Plot the price to earnings ratio in the bottom right -------
+            self.ax4.bar(self.n, df.at[0, 'PE ratio (trailing)'], color=df.at[0, 'currency'], width=0.4,
+                     alpha=0.5, edgecolor='k')
+            # make it pretty (transparency, black edges, scaling etc)
+
+            # ------- Plot the HQ location and company name on a map of Europe -------
+            # Indirectly informs about currency, tax rate, regulatory issues, stock market, etc
+            self.ax5.scatter(df.at[0, 'Lat'], df.at[0, 'Lon'], color=df.at[0, 'currency'], alpha=0.8, edgecolors='k')
+            # add annotations, fix size and prettify
+
+            # ------- Plot current price to Graham number ratio in the lower right -------
+            # We calculate the ratio GP of current price to Graham Value (aka Intrinsic Value)
+            # to know if the stock undervalued (GP<1) or overvalued (GP>1).
+            # The formula for Graham Value is V = EPS * (fPE + 2g) with:
+            # V = Intrinsic Stock Value, EPS =  latest Earnings per Share, g = growth rate over the last 3 years,
+            # fPE = fair P/E ratio.
+            # In 2023, for a company growing at 2% yearly, a good fPE would be 12. 20 to 25 is average.
+            # g is the average growth rate of Pretax Income (earnings) between 2020 and 2023 (get from Yahoo! Finance)
+            # By then dividing the current stock price by the intrinsic value V, we get a number around 1 that expresses
+            # the current valuation of the stock with respect to Intrinsic Value. Numbers below ~0.9 can be considered
+            # potentially good investments.
+            # 1. Find out g or average Pretax Income growth rate between 2020 and 2023:
+            g1 = (df.at[0, 'Pretax Income 2022'] - df.at[0, 'Pretax Income 2021']) / df.at[0, 'Pretax Income 2021']
+            g2 = (df.at[0, 'Pretax Income 2023'] - df.at[0, 'Pretax Income 2022']) / df.at[0, 'Pretax Income 2022']
+            g = (g1 + g2)/2
+            # 2. Calculate V
+            V = df.at[0, 'EPS'] * (20 + 2 * g)
+            # 3. Calculate the GP ratio
+            GP = df['Close'].iloc[-1] / V
+
+            # For plotting we use a semicircular polar plot with GP as theta and current price as R. In addition we
+            # want the size of the data point to reflect the potential gain or loss per stock, that is, the difference
+            # between current price and fair value V.
+            # 4. Convert V to theta in degrees for plotting, we want a value of 1 to be "vertical" (90 degrees)
+            # so that undervalued stocks are in the left quadrant and overvalued stock in the right quadrant
+            GPt = GP * 90
+            GPt = GPt * np.pi / 180  # cit actually needs to be in radians
+            # 5. Calculate the net gain per stock
+            Gain = abs(df['Close'].iloc[-1] - V)
+            # 6. Plot
+            if GP >= -0.5 and GP <= 2.25:
+                self.ax6.scatter(GPt, df['Close'].iloc[-1], color=df.at[0, 'currency'], alpha=0.5, edgecolors='k',
+                         s=5*Gain)
+                self.ax6.set_rmin(10)
+                self.ax6.set_rmax(1500)
+                self.ax6.set_rorigin(1)
+            else:
+                print(f'The Current stock price to intrinsic value ratio is off the scale ({GP}). Large potential for '
+                  f'losses!')
+
+
+
+        # ------- If the Checkbutton was unchecked, we remove the corresponding data -------
+        elif var.get()==0: # check the boolean state of the last clicked Checkbutton
+
+            for line in self.ax1.lines:
+                if line.get_color() == df.at[0, 'currency']:
+                    line.remove()
+
+            for fill in self.ax1.patches:
+                CL = list(fill.get_facecolor())
+                CL = CL[:3]
+                LC = list(colors.to_rgb(df.at[0, 'currency'])), # It won't work with a color name, hence RGB
+                LC= list(LC[0])
+                if CL[0] == LC[0] and CL[1] == LC[1] and CL[2] == LC[2]:
+                    fill.set_alpha(0)
+
+            for bar in self.ax2.patches:
+                CL = list(bar.get_facecolor())
+                CL = CL[:3]
+                LC = list(colors.to_rgb(df.at[0, 'currency'])),
+                LC= list(LC[0])
+                if CL[0] == LC[0] and CL[1] == LC[1] and CL[2] == LC[2]:
+                    bar.set_alpha(0)
+            # We need to keep building this part. It should enable us to toggle data display on and off
+            # when clicking on individual stock Checkbuttons. It is very hard because there are all kinds of
+            # artists under different names. The strategy is to use the color to recognize the dat to be removed.
+            # we need to use the get_color method on th right kind of artist. The difficulty is to find the artist.
+        self.canvas.draw()
+
+
+    def clear_plots(self): # This clears all plots
+        '''
+
+        :return:
+
+        This method simply goes through all the plots and clears their axes from any data.
+
+        The plots are then reset for further use.
+
+        It is an inelegant piece of code that needs to be improved.
+
+        -------------------------------
+        '''
+
+        # ------- Clear all plotted data... -------
+        self.ax1.cla()
+        self.ax2.cla()
+        self.ax3.cla()
+        self.ax4.cla()
+        self.ax5.cla()
+        self.ax6.cla()
+        self.canvas.draw()
+
+        # ------- Restore the dashboard specs for further use -------
+        # Note: One would like to call self.dashboard.layout() here, but it does not produce the intended result.
+        # Hence this stupid workaround.
+        # self.dashboard_layout()
+        self.ax1.grid(True, color='silver', alpha=0.5)
+        self.ax1.set_title(label='Historical stock price', loc='left', fontsize=10, weight='bold')
+        self.ax1.set_xlabel(xlabel='Date', fontsize=10), self.ax1.set_ylabel(ylabel='Stock price (local currency)',
+                                                                             fontsize=10)
+
+        self.ax2.grid(True, color='silver', alpha=0.5)
+        self.ax2.set_xticklabels([])  # gets rid of the useless x labels
+        self.ax2.set_title(label='Stock performance 2022-2023', loc='left', fontsize=10, weight='bold')
+        self.ax2.set_ylabel(ylabel='Price change (%)', fontsize=10)
+
+        self.ax3.axline([0, 0], slope=1, c='silver', alpha=0.5, lw=1)  # draw a y = x line to facilitate reading data
+        self.ax3.set_xscale('log'), self.ax3.set_yscale('log')  # switch to a log scale for readability
+        self.ax3.set_xbound(lower=0, upper=1000), self.ax3.set_ybound(lower=0, upper=1000)
+        self.ax3.grid(True, color='silver', alpha=0.5, which='both')
+        self.ax3.set_title(label='Revenue to Debt ratio', loc='left', fontsize=10, weight='bold')
+        self.ax3.set_xlabel(xlabel='Debt (in B)', fontsize=10), self.ax3.set_ylabel(ylabel='Revenue (in B)',
+                                                                                    fontsize=10)
+
+        self.ax4.grid(True, color='silver', alpha=0.5)
+        self.ax4.set_title(label='Price to Earnings ratio', loc='center', fontsize=10, weight='bold')
+        self.ax4.set_xticklabels([])
+
+
+        projPC = ccrs.PlateCarree()
+        lonW, lonE, latS, latN = 20, -10, 35, 60
+        cLat = (latN + latS) / 2
+        cLon = (lonW + lonE) / 2
+        res = '50m'  # This can be change to increase or decrease the resolution of coastlines
+        self.ax5 = plt.subplot2grid((4, 4), (0, 3), rowspan=2, colspan=1, fig=self.figure, projection=projPC)
+        self.ax5.set_extent([lonW, lonE, latS, latN], crs=projPC)
+        self.ax5.coastlines(resolution=res, color='black')
+        self.ax5.add_feature(cfeature.BORDERS, linewidth=0.5, edgecolor='blue')
+        self.ax5.set_facecolor(cfeature.COLORS['water'])  # A matter of taste
+        self.ax5.add_feature(cfeature.LAND)  # A matter of taste
+        self.ax5.set_title(label='Headquarters location', loc='center', fontsize=10, weight='bold')
+
+
+        self.ax6.set_thetamin(-25)
+        self.ax6.set_thetamax(205)
+        self.ax6.set_theta_zero_location('W')
+        self.ax6.set_theta_direction(-1)
+        self.ax6.set_rscale('log')
+        self.ax6.set_rmin(10)
+        self.ax6.set_rmax(1500)
+        self.ax6.set_rorigin(1)
+        self.ax6.set_xticklabels([-0.5, 0, 0.5, 1, 1.5, 2])  # use a pseudo x scale
+        props = dict(boxstyle='square', facecolor='silver', alpha=0.5)  # textbox features
+        # add some explanation to the plot: datapoints below 1 are undervalued, over 1 are overvalued
+        self.ax6.text(0, 0.9, 'Undervalued', transform=self.ax6.transAxes, fontsize=10, verticalalignment='top',
+                      bbox=props)
+        self.ax6.text(0.7, 0.9, 'Overvalued', transform=self.ax6.transAxes, fontsize=10, verticalalignment='top',
+                      bbox=props)
+        self.ax6.set_title(label='Current price to Graham Value ratio', loc='center', fontsize=10, weight='bold')
+
+
+        self.canvas.draw()
+
+
+port = portfolio_analyzer()
+port.master.title('The Financial Tiles')
+port.mainloop()
